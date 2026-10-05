@@ -6,7 +6,7 @@
 - [ ] Dùng ontology gợi ý (có thể chỉnh nhỏ)
 - [x] Tự thiết kế (xét bonus +15, xem `SUBMISSION.md`)
 
-> Đây là bản thiết kế để triển khai, chưa phải mô tả một graph đã nạp. Sau KG-2/KG-3, cần đối chiếu label, quan hệ và truy vấn bên dưới với graph thật; không coi kết quả dự kiến là bằng chứng đã kiểm chứng.
+KG-2, KG-3 và KG-4 đã được triển khai trong `src/graph.py`. Benchmark đầy đủ cho 18 văn bản luật và 20 bài báo nằm trong [ket_qua_benchmark_kg.txt](../ket_qua_benchmark_kg.txt): 343 node / 601 cạnh ở lần chạy đó. Số liệu graph 2 bài ở mục 7 chỉ là kiểm tra cục bộ trước benchmark.
 
 ## 1. Sơ đồ
 
@@ -14,6 +14,7 @@
 
 ```mermaid
 flowchart LR
+    N[NewsArticle] -- REPORTS --> K
     P[Person] -- "INVOLVED_IN<br/>role, charge, sentence" --> K[Case]
     K -- CHARGED_WITH --> C((Crime))
     K -- "INVOLVES<br/>amount_raw, amount_g, comparator" --> S((Substance))
@@ -35,14 +36,15 @@ Khác biệt chính so với gợi ý: `QuantityRule` lưu ngưỡng có thể s
 | --- | --- | --- | --- | --- | --- |
 | `Article` | Một điều luật | `id` = metadata `article`, ví dụ `Điều 250 BLHS` | `title`, `law`, `doc_id` | Luật | Metadata và regex |
 | `Clause` | Một khoản của điều luật | `id` = `Article.id + " khoản " + number` | `number`, `penalty`, `text`, `doc_id` | Luật | Regex tách khoản, giữ nguyên văn |
-| `QuantityRule` | Điều kiện khối lượng của một chất tại một điểm/khoản | `id` = `Clause.id + điểm + thứ tự điều kiện` | `point`, `min_g`, `max_g`, `min_inclusive`, `max_inclusive`, `raw_text`, `doc_id` | Luật | Regex cho mẫu xác định; không chắc thì không tạo rule |
+| `QuantityRule` | Điều kiện khối lượng của một chất tại một điểm/khoản | `id` = `Clause.id + " điểm " + point + " " + substance` | `point`, `min_g`, `max_g`, `min_inclusive`, `max_inclusive`, `raw_text`, `doc_id` | Luật | Regex cho mẫu xác định; không chắc thì không tạo rule |
 | `Crime` | Tội danh chuẩn dùng chung | `name` chuẩn hóa | `name`, `source_doc_ids` | Cả hai | Tiêu đề điều luật; tin trích bằng LLM rồi `link_entity` |
+| `NewsArticle` | Nguồn của một bài báo, kể cả khi không có vụ án | `id` = `doc_id` | `title`, `source_url`, `doc_id` | Tin | Metadata |
 | `Case` | Một vụ việc được bài báo kể | `id` = `doc_id + ":case:" + case_index` | `name`, `summary`, `date`, `source_title`, `doc_id` | Tin | LLM; `case_index` là thứ tự trong bài |
 | `Person` | Người được nhắc trong một bài | `id` = `doc_id + ":person:" + normalized_name` | `name`, `aliases`, `doc_id` | Tin | LLM, chuẩn hóa tên trong phạm vi bài |
-| `Substance` | Tên chất ma túy chuẩn | `name`, ví dụ `MDMA` | `name`, `aliases`, `source_doc_ids` | Cả hai | Danh sách chất/regex ở luật; LLM và chuẩn hóa ở tin |
+| `Substance` | Tên chất ma túy chuẩn | `name`, ví dụ `MDMA` | `name`, `source_doc_ids` | Cả hai | Danh sách chất/regex ở luật; LLM và chuẩn hóa bí danh trong Python ở tin |
 | `Location` | Địa điểm của vụ trong bài | `id` = `doc_id + ":location:" + normalized_name` | `name`, `doc_id` | Tin | LLM |
 
-`doc_id` có trên các node gắn với đúng một tài liệu: `Article`, `Clause`, `QuantityRule`, `Case`, `Person`, `Location`. `Crime` và `Substance` là node chuẩn dùng chung, nên lưu nguồn ở `source_doc_ids` thay vì gán một `doc_id` đơn lẻ gây hiểu nhầm. Mỗi tài liệu luật/tin vẫn có node riêng mang `doc_id` để vector search tìm được điểm vào graph.
+`doc_id` có trên các node gắn với đúng một tài liệu: `Article`, `Clause`, `QuantityRule`, `NewsArticle`, `Case`, `Person`, `Location`. `Crime` và `Substance` là node chuẩn dùng chung, nên lưu nguồn ở `source_doc_ids` thay vì gán một `doc_id` đơn lẻ gây hiểu nhầm. Mỗi tài liệu luật/tin vẫn có node riêng mang `doc_id` để vector search tìm được điểm vào graph.
 
 Không tự động gộp `Person` hoặc `Case` giữa các bài chỉ vì tên giống nhau: có thể là hai người hoặc hai vụ khác nhau. Đổi lại, cùng người/vụ xuất hiện ở nhiều bài có thể có nhiều node; chỉ hợp nhất khi có bằng chứng định danh đủ mạnh.
 
@@ -51,6 +53,7 @@ Không tự động gộp `Person` hoặc `Case` giữa các bài chỉ vì tên
 | Type | Từ → Đến | Properties trên cạnh | Ý nghĩa |
 | --- | --- | --- | --- |
 | `DEFINES` | `Article` → `Crime` | Không | Điều luật quy định tội danh |
+| `REPORTS` | `NewsArticle` → `Case` | Không | Bài báo kể về vụ việc |
 | `HAS_CLAUSE` | `Article` → `Clause` | Không | Điều luật gồm các khoản |
 | `MENTIONS` | `Clause` → `Substance` | Không | Khoản nhắc tới chất; chưa khẳng định một ngưỡng áp dụng |
 | `HAS_RULE` | `Clause` → `QuantityRule` | Không | Khoản có điều kiện khối lượng đã phân tích được |
@@ -83,6 +86,12 @@ Chỉ tạo `QuantityRule` khi xác định được chất, đơn vị và cậ
 
 Nếu graph thiếu dữ kiện do trích xuất, GraphRAG vẫn cần giữ chunk gốc của vector search trong prompt; không suy diễn dữ kiện không có trong graph hoặc nguồn.
 
+### Truy xuất KG-3 đã triển khai
+
+`Neo4jGraph.context()` lấy seed theo `doc_id` và tên trong câu hỏi, rồi ưu tiên vụ trong tài liệu đã truy xuất hoặc vụ gắn với người được nêu đích danh. Từ `Case`, truy vấn qua `Crime ← Article → Clause`; giữ khoản 1, khoản được hỏi trực tiếp và khoản có `QuantityRule` khớp khối lượng của vụ. Với “hơn X”, chỉ chọn rule có cận trên mở để không khẳng định sai khoảng; lượng “gần/khoảng” không tự quyết định khoản. Câu hỏi “cao nhất” lấy khoản có khung tù cao nhất trong đúng tội của người được hỏi. Câu hỏi trực tiếp về Điều luật và kết quả vector từ luật cũng lấy nội dung khoản liên quan, kể cả định nghĩa “tiền chất”. Các dữ kiện trùng được gộp và giới hạn bởi `max_facts`.
+
+Lần `--check` gần nhất chạy trên database riêng cho bonus, có đủ 7 dòng `[OK]`, gồm KG-2: 255 node / 506 cạnh, KG-3: 10 dữ kiện có Điều 251 và KG-4. Output nguyên văn ở [bonus_check.txt](bonus_check.txt). KG-4 giữ nguyên top-k chunk của Flat RAG, lấy `doc_id` không trùng để mở rộng graph, rồi gửi cả hai loại ngữ cảnh cho LLM. Benchmark đầy đủ đã kiểm tra Q1–Q6; kết quả Q6 đạt recall 0.33 và judge 2, được phân tích trong [REPORT_KG.md](REPORT_KG.md).
+
 ## 6. Quyết định thiết kế và đánh đổi
 
 1. **Thêm `QuantityRule` cho điều kiện khối lượng có cấu trúc.** Phương án khác là chỉ giữ `Clause.text`. Node mới cho phép đối chiếu MDMA của Q5 theo gam; đổi lại phải viết parser, xử lý cận khoảng và tránh áp dụng sai khi luật quy định nhiều chất cùng lúc. Giữ `raw_text` để kiểm tra.
@@ -92,13 +101,30 @@ Nếu graph thiếu dữ kiện do trích xuất, GraphRAG vẫn cần giữ chu
 
 ## 7. So với ontology gợi ý (bắt buộc nếu xét bonus)
 
-| Điểm khác | Gợi ý làm gì | Thiết kế này làm gì | Vấn đề giải quyết | Bằng chứng cần bổ sung sau triển khai |
+| Điểm khác | Gợi ý làm gì | Thiết kế này làm gì | Vấn đề giải quyết | Bằng chứng đã chạy |
 | --- | --- | --- | --- | --- |
-| Ngưỡng khối lượng | `Clause.text` và `MENTIONS` lưu nguyên văn nhưng không có cận số | Thêm `QuantityRule` với `min_g/max_g`, cờ bao gồm cận, `FOR_SUBSTANCE` | Q5: so hơn 9,6 kg MDMA với mốc 100 g ở khoản 4 Điều 250 | Chạy `MATCH (:Article {id:'Điều 250 BLHS'})-[:HAS_CLAUSE]->(cl:Clause)-[:HAS_RULE]->(q:QuantityRule)-[:FOR_SUBSTANCE]->(:Substance {name:'MDMA'}) RETURN cl.number,q.min_g,q.max_g,q.raw_text`; đối chiếu cạnh `Case-[:INVOLVES]->MDMA` và Q5 trước/sau |
-| Khóa vụ | `Case` theo tên LLM đặt | `Case.id = doc_id + case_index` | Tránh nhập hai vụ trùng tên thành một node | Chạy `MATCH (k:Case) RETURN k.id,k.name,k.doc_id ORDER BY k.name`; kiểm tra vụ bị gộp sai trước/sau |
-| Khóa người | `Person` theo tên | `Person.id = doc_id + normalized_name`, `aliases` riêng | Tránh nhập hai người trùng tên ở các bài khác nhau | Chạy `MATCH (p:Person) RETURN p.id,p.name,p.doc_id,p.aliases`; kiểm tra tên trùng và đường đi Q2–Q3 |
+| Ngưỡng khối lượng | `Clause.text` và `MENTIONS` lưu nguyên văn nhưng không có cận số | Thêm `QuantityRule` với `min_g/max_g`, cờ bao gồm cận, `FOR_SUBSTANCE`; lượng tin có `amount_g/comparator` | So hơn 9,6 kg MDMA với mốc 100 g ở khoản 4 Điều 250 | CQ-B1 chạy cùng Cypher số học: HINT 0 hàng; mới 1 hàng, 9600 g với dấu >, ngưỡng 100 g, khoản 4 điểm b |
+| Khóa vụ | `Case` theo tên LLM đặt | `Case.id = doc_id + ":case:" + case_index` | Tránh nhập hai vụ trùng tên thành một node và ghi đè nguồn | Fixture CQ-B2 dùng JSON cố định: HINT 1 Case sau khi nạp 2 nguồn; mới giữ 2 Case và 2 mức án |
+| Khóa người | `Person` theo tên | `Person.id = doc_id + ":person:" + normalized_name`, `aliases` riêng | Tránh nhập hai người khác nhau nhưng trùng tên giữa các bài | Cùng fixture CQ-B2: HINT 1 Person, aliases người B; mới 2 Person, giữ aliases người A/B theo nguồn |
 
-**Tình trạng bằng chứng:** dữ liệu nguồn cho thấy `data/drug_law/blhs-dieu-250.md` khoản 4 điểm b ghi “100 gam trở lên”, còn `data/drug_news/news-100260917203001265.md` ghi Cái Quang Huy liên quan hơn 9,6 kg MDMA. Chưa có graph/benchmark của thiết kế mới hoặc bản gợi ý để khẳng định cải thiện thực nghiệm. Sau khi triển khai, lưu kết quả truy vấn thực và so sánh benchmark theo `SUBMISSION.md`; không sửa tay số liệu.
+**Nguồn và cách chạy baseline:** [baselines/hint/README.md](../baselines/hint/README.md) ghi rõ các hàm HINT lấy từ commit `859e8d1`, KG-3 theo Bước 5 và lệnh chạy lại. [bonus_compare.py](../scripts/bonus_compare.py) dùng biến `LAB_SOLUTION_PACKAGE` có sẵn của benchmark; không sửa benchmark hoặc test gốc. Database bonus riêng ở cổng 17687; graph bài chính chỉ được đọc.
+
+**So sánh benchmark GraphRAG** ([HINT](../ket_qua_benchmark_kg.hint.txt) / [tự thiết kế](../ket_qua_benchmark_kg.txt)):
+
+| Chỉ số | HINT | Tự thiết kế |
+| --- | ---: | ---: |
+| Node / cạnh tại lần benchmark | 202 / 381 | 343 / 601 |
+| Recall trung bình | 0.63 | 0.89 |
+| Judge trung bình | 1.33 | 2.00 |
+| Indexing USD | 0.00925 | 0.00992 |
+| Token đầu vào mỗi câu | 3307 | 1468 |
+| USD mỗi câu | 0.00053 | 0.00026 |
+
+Trong lần chạy này, Q4 HINT trả “Không đủ thông tin” (recall 0 / judge 0), bản mới trả đúng hành vi và mức tối đa (1 / 2). Q5 HINT trả nhầm Điều 251 (0.80 / 1), bản mới nêu khoản 4 Điều 250 (1 / 2). Bằng chứng câu trả lời nguyên văn, Cypher và kết quả nằm trong [BONUS_EVIDENCE.md](BONUS_EVIDENCE.md); dữ liệu máy đọc được ở [bonus_evidence.json](bonus_evidence.json).
+
+**Competency questions bổ sung:** CQ-B1 trên corpus thật đối chiếu số gam với ngưỡng điểm/khoản trực tiếp bằng graph; HINT còn thiếu cấu trúc số học. CQ-B2 trên dữ liệu tổng hợp hỏi mức án của hai người/vụ trùng tên theo từng nguồn A/B: HINT chỉ giữ nguồn B 7 năm, thiết kế mới giữ A 2 năm và B 7 năm. Fixture được đánh dấu tổng hợp và dùng cùng JSON cố định cho hai builder, không phải chứng cứ về hai vụ thật.
+
+**Đánh đổi và giới hạn:** Graph mới lớn hơn và indexing đắt hơn; ngữ cảnh hỏi gọn hơn trong lần đo này. Khóa theo nguồn tránh gộp nhầm nhưng vẫn để lại trùng cùng người qua nhiều bài (E3). Hai benchmark trích xuất và sinh câu trả lời bằng LLM riêng nên chênh lệch điểm phản ánh cả prompt, truy xuất và ontology; một lần chạy chưa chứng minh tác động nhân quả của riêng từng thay đổi. Truy vấn số học và fixture cố định cung cấp bằng chứng trực tiếp cho hai khả năng cấu trúc mới.
 
 ## 8. Hạn chế còn lại
 

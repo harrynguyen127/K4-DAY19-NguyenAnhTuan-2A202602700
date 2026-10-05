@@ -1,0 +1,108 @@
+{
+  "method": "Real-corpus queries before fixture resets. Submitted graph is read-only. Identity fixture uses fixed synthetic JSON, not LLM extraction.",
+  "hint_origin": "859e8d1:src/graph.py HINT helpers + LAB_GUIDE.md steps 4/5",
+  "full_graph_stats": {
+    "hint": {
+      "nodes": 202,
+      "relationships": 381
+    },
+    "submitted": {
+      "nodes": 343,
+      "relationships": 602
+    }
+  },
+  "mass_competency_question": "Vụ Cái Quang Huy có vượt ngưỡng MDMA của khoản 4 Điều 250 không? Trả về số gam và điểm/khoản bằng Cypher.",
+  "mass_query": "MATCH (k:Case)-[r:INVOLVES]->(s:Substance {name:'MDMA'})\nMATCH (k)-[:CHARGED_WITH]->(c:Crime)<-[:DEFINES]-(a:Article)-[:HAS_CLAUSE]->(cl:Clause)\nMATCH (cl)-[:HAS_RULE]->(qr:QuantityRule)-[:FOR_SUBSTANCE]->(s)\nWHERE k.doc_id = $news_doc AND a.id = $article_id AND cl.number = 4\n  AND qr.max_g IS NULL AND qr.min_inclusive = true\n  AND r.comparator IN ['=', '>', '>='] AND r.amount_g >= qr.min_g\nRETURN k.name AS case_name, k.doc_id AS doc_id, a.id AS article,\n       cl.number AS clause, qr.point AS point, qr.min_g AS threshold_g,\n       r.amount_g AS amount_g, r.comparator AS comparator, cl.penalty AS penalty\nORDER BY case_name",
+  "mass_params": {
+    "news_doc": "news-100260917203001265",
+    "article_id": "Điều 250 BLHS"
+  },
+  "mass_results": {
+    "hint": [],
+    "submitted": [
+      {
+        "case_name": "Vụ vận chuyển ma túy từ Đức về Việt Nam",
+        "doc_id": "news-100260917203001265",
+        "article": "Điều 250 BLHS",
+        "clause": 4,
+        "point": "b",
+        "threshold_g": 100.0,
+        "amount_g": 9600.0,
+        "comparator": ">",
+        "penalty": "phạt tù 20 năm, tù chung thân hoặc tử hình"
+      }
+    ]
+  },
+  "hint_raw_amount": [
+    {
+      "name": "Vụ vận chuyển ma túy từ Đức về Việt Nam",
+      "amount": "9.6kg"
+    }
+  ],
+  "hint_has_law_clause": [
+    {
+      "article": "Điều 250 BLHS",
+      "number": 4,
+      "penalty": "phạt tù 20 năm, tù chung thân hoặc tử hình"
+    }
+  ],
+  "identity_fixture": {
+    "notice": "Synthetic fixture, not news evidence: two different people/cases in two documents intentionally share display names.",
+    "query": "MATCH (p:Person)-[r:INVOLVED_IN]->(k:Case)\nRETURN k.doc_id AS doc_id, k.name AS case_name, p.name AS person,\n       p.aliases AS aliases, r.sentence AS sentence\nORDER BY doc_id",
+    "hint": {
+      "rows": [
+        {
+          "doc_id": "bonus-fixture-b",
+          "case_name": "Vụ mua bán trái phép chất ma túy",
+          "person": "Nguyễn Văn A",
+          "aliases": [
+            "người B"
+          ],
+          "sentence": "7 năm tù"
+        }
+      ],
+      "counts": [
+        {
+          "label": "Case",
+          "n": 1
+        },
+        {
+          "label": "Person",
+          "n": 1
+        }
+      ]
+    },
+    "submitted": {
+      "rows": [
+        {
+          "doc_id": "bonus-fixture-a",
+          "case_name": "Vụ mua bán trái phép chất ma túy",
+          "person": "Nguyễn Văn A",
+          "aliases": [
+            "người A"
+          ],
+          "sentence": "2 năm tù"
+        },
+        {
+          "doc_id": "bonus-fixture-b",
+          "case_name": "Vụ mua bán trái phép chất ma túy",
+          "person": "Nguyễn Văn A",
+          "aliases": [
+            "người B"
+          ],
+          "sentence": "7 năm tù"
+        }
+      ],
+      "counts": [
+        {
+          "label": "Case",
+          "n": 2
+        },
+        {
+          "label": "Person",
+          "n": 2
+        }
+      ]
+    }
+  }
+}
