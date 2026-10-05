@@ -1,68 +1,110 @@
 # Thiết kế Ontology — Day 19
 
-**Họ tên:** …  **MSSV:** …
+**Họ tên:** Nguyễn Anh Tuấn  **MSSV:** 2A202602700
 
 **Lựa chọn** (đánh dấu một):
 - [ ] Dùng ontology gợi ý (có thể chỉnh nhỏ)
-- [ ] Tự thiết kế (xét bonus +15, xem `SUBMISSION.md`)
+- [x] Tự thiết kế (xét bonus +15, xem `SUBMISSION.md`)
 
-> Hướng dẫn: `LAB_GUIDE.md` Bước 2. Dùng ontology gợi ý thì vẫn phải điền đủ các mục dưới đây bằng lời của bạn.
+> Đây là bản thiết kế để triển khai, chưa phải mô tả một graph đã nạp. Sau KG-2/KG-3, cần đối chiếu label, quan hệ và truy vấn bên dưới với graph thật; không coi kết quả dự kiến là bằng chứng đã kiểm chứng.
 
 ## 1. Sơ đồ
 
-Vẽ bằng mermaid (hoặc chèn ảnh `report/img/ontology.png`). Đánh dấu rõ **node cầu nối**.
+`Crime` nối KB tin tức với KB luật; `Substance` giúp tìm các vụ liên quan cùng chất và đối chiếu ngưỡng khối lượng.
 
 ```mermaid
 flowchart LR
-    A[...] -- ... --> B[...]
+    P[Person] -- "INVOLVED_IN<br/>role, charge, sentence" --> K[Case]
+    K -- CHARGED_WITH --> C((Crime))
+    K -- "INVOLVES<br/>amount_raw, amount_g, comparator" --> S((Substance))
+    K -- LOCATED_IN --> L[Location]
+    A[Article] -- DEFINES --> C
+    A -- HAS_CLAUSE --> CL["Clause<br/>number, penalty, text"]
+    CL -- MENTIONS --> S
+    CL -- HAS_RULE --> QR["QuantityRule<br/>min_g, max_g, bounds, point"]
+    QR -- FOR_SUBSTANCE --> S
+    style C fill:#f9d71c,color:#000
+    style S fill:#f9d71c,color:#000
 ```
+
+Khác biệt chính so với gợi ý: `QuantityRule` lưu ngưỡng có thể so sánh; `Case` và `Person` không dùng tên tự do làm khóa. Mức án đã tuyên thuộc người trong vụ (`INVOLVED_IN.sentence`); khung hình phạt của luật thuộc `Clause.penalty`.
 
 ## 2. Entity types (node labels)
 
-| Label | Ý nghĩa | Khóa định danh (`MERGE` theo) | Properties | Lấy từ KB nào | Trích bằng (regex / LLM / khác) |
+| Label | Ý nghĩa | Khóa định danh (`MERGE` theo) | Properties | Lấy từ KB nào | Trích bằng |
 | --- | --- | --- | --- | --- | --- |
-| | | | | | |
+| `Article` | Một điều luật | `id` = metadata `article`, ví dụ `Điều 250 BLHS` | `title`, `law`, `doc_id` | Luật | Metadata và regex |
+| `Clause` | Một khoản của điều luật | `id` = `Article.id + " khoản " + number` | `number`, `penalty`, `text`, `doc_id` | Luật | Regex tách khoản, giữ nguyên văn |
+| `QuantityRule` | Điều kiện khối lượng của một chất tại một điểm/khoản | `id` = `Clause.id + điểm + thứ tự điều kiện` | `point`, `min_g`, `max_g`, `min_inclusive`, `max_inclusive`, `raw_text`, `doc_id` | Luật | Regex cho mẫu xác định; không chắc thì không tạo rule |
+| `Crime` | Tội danh chuẩn dùng chung | `name` chuẩn hóa | `name`, `source_doc_ids` | Cả hai | Tiêu đề điều luật; tin trích bằng LLM rồi `link_entity` |
+| `Case` | Một vụ việc được bài báo kể | `id` = `doc_id + ":case:" + case_index` | `name`, `summary`, `date`, `source_title`, `doc_id` | Tin | LLM; `case_index` là thứ tự trong bài |
+| `Person` | Người được nhắc trong một bài | `id` = `doc_id + ":person:" + normalized_name` | `name`, `aliases`, `doc_id` | Tin | LLM, chuẩn hóa tên trong phạm vi bài |
+| `Substance` | Tên chất ma túy chuẩn | `name`, ví dụ `MDMA` | `name`, `aliases`, `source_doc_ids` | Cả hai | Danh sách chất/regex ở luật; LLM và chuẩn hóa ở tin |
+| `Location` | Địa điểm của vụ trong bài | `id` = `doc_id + ":location:" + normalized_name` | `name`, `doc_id` | Tin | LLM |
+
+`doc_id` có trên các node gắn với đúng một tài liệu: `Article`, `Clause`, `QuantityRule`, `Case`, `Person`, `Location`. `Crime` và `Substance` là node chuẩn dùng chung, nên lưu nguồn ở `source_doc_ids` thay vì gán một `doc_id` đơn lẻ gây hiểu nhầm. Mỗi tài liệu luật/tin vẫn có node riêng mang `doc_id` để vector search tìm được điểm vào graph.
+
+Không tự động gộp `Person` hoặc `Case` giữa các bài chỉ vì tên giống nhau: có thể là hai người hoặc hai vụ khác nhau. Đổi lại, cùng người/vụ xuất hiện ở nhiều bài có thể có nhiều node; chỉ hợp nhất khi có bằng chứng định danh đủ mạnh.
 
 ## 3. Relationships
 
 | Type | Từ → Đến | Properties trên cạnh | Ý nghĩa |
 | --- | --- | --- | --- |
-| | | | |
+| `DEFINES` | `Article` → `Crime` | Không | Điều luật quy định tội danh |
+| `HAS_CLAUSE` | `Article` → `Clause` | Không | Điều luật gồm các khoản |
+| `MENTIONS` | `Clause` → `Substance` | Không | Khoản nhắc tới chất; chưa khẳng định một ngưỡng áp dụng |
+| `HAS_RULE` | `Clause` → `QuantityRule` | Không | Khoản có điều kiện khối lượng đã phân tích được |
+| `FOR_SUBSTANCE` | `QuantityRule` → `Substance` | Không | Điều kiện khối lượng áp cho chất nào |
+| `CHARGED_WITH` | `Case` → `Crime` | Không | Tội danh được nêu trong tin về vụ |
+| `INVOLVES` | `Case` → `Substance` | `amount_raw`, `amount_g`, `comparator` (`=`, `>`, `>=`, `~` hoặc rỗng) | Vụ liên quan đến chất; `amount_g` được đổi sang gam, `amount_raw` giữ câu chữ bài báo |
+| `LOCATED_IN` | `Case` → `Location` | Không | Nơi diễn ra vụ theo tin |
+| `INVOLVED_IN` | `Person` → `Case` | `role`, `charge`, `sentence` | Vai trò, tội danh và mức án của **người đó** trong vụ |
+
+Chỉ tạo `QuantityRule` khi xác định được chất, đơn vị và cận khoảng. Ví dụ: Điều 250 BLHS khoản 4 điểm b quy định MDMA **100 gam trở lên** → `min_g=100`, `min_inclusive=true`, `max_g=null`. Tin về Cái Quang Huy ghi **hơn 9,6 kg MDMA** → `amount_g=9600`, `comparator=">"`; lượng thực lớn hơn 9600 g, nên vượt ngưỡng 100 g. Điều kiện về tổng lượng nhiều chất hoặc khối lượng tương đương chưa được suy diễn từ một rule đơn chất.
 
 ## 4. Node cầu nối giữa 2 KB
 
-- **Node nào:** …
-- **Vì sao chọn node này:** …
-- **Cách đảm bảo hai phía khớp tên** (chuẩn hóa, `link_entity`, danh sách chuẩn trong prompt…): …
-- **Khi nào cầu gãy, và bạn xử lý thế nào:** …
+- **Node nào:** `Crime` là cầu nối chính: `Case → CHARGED_WITH → Crime ← DEFINES ← Article`. `Substance` là cầu nối bổ sung: `Case → INVOLVES → Substance ← FOR_SUBSTANCE ← QuantityRule ← HAS_RULE ← Clause`.
+- **Vì sao chọn:** Q3–Q4 cần từ vụ/người tìm điều luật của tội danh; Q5 cần thêm chất và khối lượng; Q6 cần liệt kê các vụ cùng liên quan MDMA.
+- **Cách khớp tên:** Lấy danh sách tội chuẩn từ tiêu đề điều luật. Chuẩn hóa khoảng trắng, chữ hoa/thường, tiền tố “Tội”, biến thể dấu/chính tả, rồi dùng `link_entity`; không nối khi dưới ngưỡng tin cậy. Với chất, dùng tên chuẩn và bảng bí danh có kiểm soát, giữ tên gốc trong nguồn.
+- **Khi cầu gãy:** Tin ghi tội danh khác tên chuẩn, không nêu tội, hoặc LLM trích sai; chất viết bằng tên đồng nghĩa chưa có trong bảng. Giữ tên gốc để kiểm tra, chỉ bổ sung ánh xạ khi xác nhận được và dùng chunk gốc khi không nối được. Không ép nối với tên gần giống nhưng chưa chắc đúng.
+- **Nguồn gốc:** Node toàn cục có `source_doc_ids`; node theo tài liệu có `doc_id`. Câu trả lời cần dẫn về `Article`/`Clause` và `Case` mang `doc_id`, tránh lấy riêng một tên chuẩn làm bằng chứng.
 
 ## 5. Competency questions
 
-Với mỗi câu trong `data/benchmark_kg.json`, ghi đường đi trên graph dùng để trả lời. Câu nào không trả lời được thì ghi rõ lý do.
-
-| Câu | Đường đi (Cypher pattern) | Trả lời được? |
+| Câu | Đường đi (Cypher pattern hoặc phép tra) | Trả lời được? |
 | --- | --- | --- |
-| Q1 | | |
-| Q2 | | |
-| Q3 | | |
-| Q4 | | |
-| Q5 | | |
-| Q6 | | |
+| Q1 — định nghĩa tiền chất | `(:Article {id:'Điều 2 Luật PCMT'})-[:HAS_CLAUSE]->(:Clause {number:4})`; đọc `Clause.text` | Có, bằng nguyên văn khoản định nghĩa; không cần node tội danh |
+| Q2 — ai bị tuyên tử hình trong vụ 36 kg | `(:Person)-[r:INVOLVED_IN]->(k:Case)`; tìm vụ theo `k.summary/source_title/date`, lọc `r.sentence` là “tử hình” | Có, nếu LLM trích đúng người và mức án riêng |
+| Q3 — Lê Minh Thành, mức án, tội, Điều 251 và khung cơ bản | `(:Person {name:'Lê Minh Thành'})-[r:INVOLVED_IN]->(:Case)-[:CHARGED_WITH]->(:Crime)<-[:DEFINES]-(:Article)-[:HAS_CLAUSE]->(:Clause {number:1})`; lấy `r.sentence`, tên tội và `Clause.penalty` | Có |
+| Q4 — Hoàng Nato bị bắt về hành vi gì, khung cao nhất | Tìm `Person.aliases` có “Hoàng Nato” → `Case → Crime ← Article → Clause`; đọc các `Clause.penalty`, lấy khung cao nhất và giữ ngữ cảnh “bị bắt” từ tin | Có về hành vi và khung luật; graph chưa phân biệt đầy đủ giai đoạn tố tụng |
+| Q5 — Cái Quang Huy, MDMA, khoản tương ứng | `Person → Case → Crime ← Article → Clause → QuantityRule → Substance`, đồng thời `Case -[:INVOLVES {amount_g, comparator}]-> Substance`; chỉ so sánh khi cùng tội, cùng chất và số lượng đủ rõ | Có cho MDMA > 9,6 kg và ngưỡng ≥ 100 g ở khoản 4 Điều 250; phải đọc `raw_text` và tin gốc trước khi nói khoản “được áp dụng” về mặt pháp lý |
+| Q6 — những vụ có MDMA | `(:Substance {name:'MDMA'})<-[:INVOLVES]-(k:Case)<-[:INVOLVED_IN]-(p:Person)`; `DISTINCT k.id`, trả `k.name`, `p.name`, nguồn bài | Có; khóa vụ theo `doc_id + case_index` tránh gộp nhầm hai vụ trùng tên |
+
+Nếu graph thiếu dữ kiện do trích xuất, GraphRAG vẫn cần giữ chunk gốc của vector search trong prompt; không suy diễn dữ kiện không có trong graph hoặc nguồn.
 
 ## 6. Quyết định thiết kế và đánh đổi
 
-Ít nhất 3 quyết định. Mỗi quyết định ghi: đã chọn gì, phương án khác là gì, vì sao chọn.
-
-1. …
-2. …
-3. …
+1. **Thêm `QuantityRule` cho điều kiện khối lượng có cấu trúc.** Phương án khác là chỉ giữ `Clause.text`. Node mới cho phép đối chiếu MDMA của Q5 theo gam; đổi lại phải viết parser, xử lý cận khoảng và tránh áp dụng sai khi luật quy định nhiều chất cùng lúc. Giữ `raw_text` để kiểm tra.
+2. **Khóa `Case`/`Person` theo tài liệu thay vì tên do LLM đặt.** Phương án khác là `MERGE` theo `name`. Khóa theo tài liệu tránh gộp nhầm vụ/người cùng tên; đổi lại cùng một vụ xuất hiện ở nhiều bài có thể chưa gộp.
+3. **Giữ `Crime` và `Substance` là node chuẩn dùng chung.** Phương án khác là một node riêng cho mỗi lần nhắc trong từng tài liệu. Node chung rút ngắn đường đi xuyên KB và hỗ trợ Q6; đổi lại cần chuẩn hóa và có nguy cơ nối sai. Dùng `link_entity`, bảng tên chất chuẩn và từ chối khi không đủ chắc chắn.
+4. **Giữ mức án đã tuyên trên `INVOLVED_IN`, khung luật trên `Clause`.** Phương án khác là đặt một mức án trên `Case` hoặc có node `Sentence` riêng. Với câu hỏi hiện tại, thuộc tính trên cạnh đủ cho Q2–Q3 và tránh gán án của người này cho người khác; chưa mô hình hóa nhiều bản án/phúc thẩm của cùng người.
 
 ## 7. So với ontology gợi ý (bắt buộc nếu xét bonus)
 
-| Điểm khác | Gợi ý làm gì | Bạn làm gì | Vấn đề nó giải quyết | Bằng chứng (Cypher, hoặc số liệu benchmark) |
+| Điểm khác | Gợi ý làm gì | Thiết kế này làm gì | Vấn đề giải quyết | Bằng chứng cần bổ sung sau triển khai |
 | --- | --- | --- | --- | --- |
-| | | | | |
+| Ngưỡng khối lượng | `Clause.text` và `MENTIONS` lưu nguyên văn nhưng không có cận số | Thêm `QuantityRule` với `min_g/max_g`, cờ bao gồm cận, `FOR_SUBSTANCE` | Q5: so hơn 9,6 kg MDMA với mốc 100 g ở khoản 4 Điều 250 | Chạy `MATCH (:Article {id:'Điều 250 BLHS'})-[:HAS_CLAUSE]->(cl:Clause)-[:HAS_RULE]->(q:QuantityRule)-[:FOR_SUBSTANCE]->(:Substance {name:'MDMA'}) RETURN cl.number,q.min_g,q.max_g,q.raw_text`; đối chiếu cạnh `Case-[:INVOLVES]->MDMA` và Q5 trước/sau |
+| Khóa vụ | `Case` theo tên LLM đặt | `Case.id = doc_id + case_index` | Tránh nhập hai vụ trùng tên thành một node | Chạy `MATCH (k:Case) RETURN k.id,k.name,k.doc_id ORDER BY k.name`; kiểm tra vụ bị gộp sai trước/sau |
+| Khóa người | `Person` theo tên | `Person.id = doc_id + normalized_name`, `aliases` riêng | Tránh nhập hai người trùng tên ở các bài khác nhau | Chạy `MATCH (p:Person) RETURN p.id,p.name,p.doc_id,p.aliases`; kiểm tra tên trùng và đường đi Q2–Q3 |
+
+**Tình trạng bằng chứng:** dữ liệu nguồn cho thấy `data/drug_law/blhs-dieu-250.md` khoản 4 điểm b ghi “100 gam trở lên”, còn `data/drug_news/news-100260917203001265.md` ghi Cái Quang Huy liên quan hơn 9,6 kg MDMA. Chưa có graph/benchmark của thiết kế mới hoặc bản gợi ý để khẳng định cải thiện thực nghiệm. Sau khi triển khai, lưu kết quả truy vấn thực và so sánh benchmark theo `SUBMISSION.md`; không sửa tay số liệu.
 
 ## 8. Hạn chế còn lại
 
-…
+- Chỉ parse ngưỡng khối lượng đơn chất có cú pháp rõ; tổng lượng nhiều chất, thể tích hoặc chất tương đương vẫn phải đọc nguyên văn luật. So ngưỡng là gợi ý truy xuất, không tự kết luận khoản luật đã được cơ quan tố tụng áp dụng.
+- Tin dùng “hơn”, “gần”, “khoảng” có độ chính xác khác nhau. Lưu `amount_raw` và `comparator`; nếu số lượng sát cận hoặc mơ hồ thì không chọn khoản tự động.
+- Một bài có thể kể nhiều lần vận chuyển cùng một chất. Chỉ ghi tổng khối lượng lên `Case → INVOLVES` khi bài nêu rõ tổng hoặc các phần được xác nhận là không trùng; không cộng các con số một cách máy móc.
+- Chưa mô hình hóa “bắt”, “khởi tố”, “truy tố”, “xét xử”, “phúc thẩm” thành sự kiện riêng; Q4 phải giữ câu chữ bài báo để không biến việc bị bắt thành việc đã bị tuyên án.
+- Chưa gộp chắc chắn cùng người/cùng vụ giữa nhiều bài; alias chỉ giúp tìm kiếm trong một bài. Q6 có thể cần rà soát trùng vụ liên bài.
+- LLM có thể bỏ sót hoặc gán nhầm tội, chất, vai trò hay mức án. Mọi liên kết quan trọng cần kiểm tra lại bằng `doc_id` và văn bản nguồn.
